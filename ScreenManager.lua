@@ -107,7 +107,7 @@ local function validateScreen( screen )
 
         for i, v in pairs( screens ) do
             if type( v ) == "table" and type( v.new ) == "function" then
-              str = str .. i .. ', '
+                str = str .. i .. ', '
             end
         end
 
@@ -181,6 +181,10 @@ end
 --                 screen's init function.
 --
 function ScreenManager.init( nscreens, screen, ... )
+    if type( nscreens ) ~= "table" or #nscreens == 0 then
+        error("The first argument of ScreenManager.init should be a table containing at least a screen", 2)
+    end
+
     stack = {}
     screens = nscreens
 
