@@ -102,11 +102,13 @@ end
 -- Check if the screen is valid or error if not
 --
 local function validateScreen( screen )
-    if not screens[screen] then
+    if type( screens[screen] ) ~= "table" or type( screens[screen].new ) ~= "function" then
         local str = "{"
 
-        for i, _ in pairs( screens ) do
-            str = str .. i .. ', '
+        for i, v in pairs( screens ) do
+            if type( v ) == "table" and type( v.new ) == "function" then
+              str = str .. i .. ', '
+            end
         end
 
         str = str:sub( 1, -3 ) .. "}"
