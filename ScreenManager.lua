@@ -115,6 +115,25 @@ local function validateScreen( screen )
     end
 end
 
+---
+-- Delegates a callback to the stack, with the apropiate propagate function
+-- callback is the callback name
+-- a, b, c, d, e, f are the event arguments
+-- level is the level of the stack to delegate to (defaults to the top)
+--
+local function delegate( callback, a, b, c, d, e, f, level )
+    level = level or #stack
+    local state = stack[level]
+
+    if not state or type( state[callback] ) ~= "function" then return end
+
+    local function propagate()
+        return delegate( callback, a, b, c, d, e, f, level - 1 )
+    end
+
+    return state[callback]( state, propagate, a, b, c, d, e, f )
+end
+
 -- ------------------------------------------------
 -- Public Functions
 -- ------------------------------------------------
@@ -248,7 +267,7 @@ end
 --                       love.filesystem.
 --
 function ScreenManager.directorydropped( path )
-    ScreenManager.peek():directorydropped( path )
+    return delegate( "directorydropped", path )
 end
 
 ---
@@ -257,11 +276,11 @@ end
 -- them.
 --
 function ScreenManager.draw()
-    for i = 1, #stack do
-        stack[i]:draw()
-    end
+    local values = { delegate( "draw" ) }
 
     ScreenManager.performChanges()
+
+    return unpack(values)
 end
 
 ---
@@ -270,7 +289,7 @@ end
 --                     dropped.
 --
 function ScreenManager.filedropped( file )
-    ScreenManager.peek():filedropped( file )
+    return delegate( "filedropped", file )
 end
 
 ---
@@ -278,9 +297,7 @@ end
 -- @param focus (boolean) True if the window gains focus, false if it loses focus.
 --
 function ScreenManager.focus( focus )
-    for i = 1, #stack do
-        stack[i]:focus( focus )
-    end
+    return delegate( "focus", focus )
 end
 
 ---
@@ -292,7 +309,7 @@ end
 --                                user's system settings.
 --
 function ScreenManager.keypressed( key, scancode, isrepeat )
-    ScreenManager.peek():keypressed( key, scancode, isrepeat )
+    return delegate( "keypressed", key, scancode, isrepeat )
 end
 
 ---
@@ -301,7 +318,7 @@ end
 -- @param scancode (Scancode)    The scancode representing the released key.
 --
 function ScreenManager.keyreleased( key, scancode )
-    ScreenManager.peek():keyreleased( key, scancode )
+    return delegate( "keyreleased", key, scancode )
 end
 
 ---
@@ -309,7 +326,7 @@ end
 -- mobile devices.
 --
 function ScreenManager.lowmemory()
-    ScreenManager.peek():lowmemory()
+    return delegate( "lowmemory" )
 end
 
 ---
@@ -317,7 +334,7 @@ end
 -- @param focus (boolean) Wether the window has mouse focus or not.
 --
 function ScreenManager.mousefocus( focus )
-    ScreenManager.peek():mousefocus( focus )
+    return delegate( "mousefocus", focus )
 end
 
 ---
@@ -330,7 +347,7 @@ end
 --                     love.mousemoved was called.
 --
 function ScreenManager.mousemoved( x, y, dx, dy )
-    ScreenManager.peek():mousemoved( x, y, dx, dy )
+    return delegate( "mousemoved", x, y, dx, dy )
 end
 
 ---
@@ -345,7 +362,7 @@ end
 --                           touchscreen touch-press.
 --
 function ScreenManager.mousepressed( x, y, button, istouch )
-    ScreenManager.peek():mousepressed( x, y, button, istouch )
+    return delegate( "mousepressed", x, y, button, istouch )
 end
 
 ---
@@ -360,7 +377,7 @@ end
 --                           touchscreen touch-release.
 --
 function ScreenManager.mousereleased( x, y, button, istouch )
-    ScreenManager.peek():mousereleased( x, y, button, istouch )
+    return delegate( "mousereleased", x, y, button, istouch )
 end
 
 ---
@@ -368,7 +385,7 @@ end
 -- @return quit (boolean) Abort quitting. If true, do not close the game.
 --
 function ScreenManager.quit()
-    ScreenManager.peek():quit()
+    return delegate( "quit" )
 end
 
 ---
@@ -377,9 +394,7 @@ end
 -- @param h (number) The new height, in pixels.
 --
 function ScreenManager.resize( w, h )
-    for i = 1, #stack do
-        stack[i]:resize( w, h )
-    end
+    return delegate( "resize", w, h )
 end
 
 ---
@@ -389,7 +404,7 @@ end
 -- @param length (number) The length of the selected candidate text. May be 0.
 --
 function ScreenManager.textedited( text, start, length )
-    ScreenManager.peek():textedited( text, start, length )
+    return delegate( "textedited", text, start, length )
 end
 
 ---
@@ -397,7 +412,7 @@ end
 -- @param input (string) The UTF-8 encoded unicode text.
 --
 function ScreenManager.textinput( input )
-    ScreenManager.peek():textinput( input )
+    return delegate( "textinput", input )
 end
 
 ---
@@ -406,9 +421,7 @@ end
 -- @param errorstr (string) The error message.
 --
 function ScreenManager.threaderror( thread, errorstr )
-    for i = 1, #stack do
-        stack[i]:threaderror( thread, errorstr )
-    end
+    return delegate( "threaderror", thread, errorstr )
 end
 
 
@@ -428,7 +441,7 @@ end
 --                                   in which case the pressure will be 1.
 --
 function ScreenManager.touchmoved( id, x, y, dx, dy, pressure )
-    ScreenManager.peek():touchmoved( id, x, y, dx, dy, pressure )
+    return delegate( "touchmoved", id, x, y, dx, dy, pressure )
 end
 
 ---
@@ -447,7 +460,7 @@ end
 --                                   in which case the pressure will be 1.
 --
 function ScreenManager.touchpressed( id, x, y, dx, dy, pressure )
-    ScreenManager.peek():touchpressed( id, x, y, dx, dy, pressure )
+    return delegate( "touchpressed", id, x, y, dx, dy, pressure )
 end
 
 ---
@@ -466,7 +479,7 @@ end
 --                                   in which case the pressure will be 1.
 --
 function ScreenManager.touchreleased( id, x, y, dx, dy, pressure )
-    ScreenManager.peek():touchreleased( id, x, y, dx, dy, pressure )
+    return delegate( "touchreleased", id, x, y, dx, dy, pressure )
 end
 
 ---
@@ -474,9 +487,7 @@ end
 -- @param dt (number) Time since the last update in seconds.
 --
 function ScreenManager.update( dt )
-    for i = 1, #stack do
-        stack[i]:update( dt )
-    end
+    return delegate( "update", dt )
 end
 
 ---
@@ -484,9 +495,7 @@ end
 -- @param visible (boolean) True if the window is visible, false if it isn't.
 --
 function ScreenManager.visible( visible )
-    for i = 1, #stack do
-        stack[i]:visible( visible )
-    end
+    return delegate( "visible", visible )
 end
 
 ---
@@ -497,7 +506,7 @@ end
 --                    indicate upward movement.
 --
 function ScreenManager.wheelmoved( x, y )
-    ScreenManager.peek():wheelmoved( x, y )
+    return delegate( "wheelmoved", x, y )
 end
 
 ---
@@ -507,7 +516,7 @@ end
 -- @param value    (number)      The new axis value.
 --
 function ScreenManager.gamepadaxis( joystick, axis, value )
-    ScreenManager.peek():gamepadaxis( joystick, axis, value )
+    return delegate( "gamepadaxis", joystick, axis, value )
 end
 
 ---
@@ -516,7 +525,7 @@ end
 -- @param button   (GamepadButton) The virtual gamepad button.
 --
 function ScreenManager.gamepadpressed( joystick, button )
-    ScreenManager.peek():gamepadpressed( joystick, button )
+    return delegate( "gamepadpressed", joystick, button )
 end
 
 ---
@@ -525,7 +534,7 @@ end
 -- @param button   (GamepadButton) The virtual gamepad button.
 --
 function ScreenManager.gamepadreleased( joystick, button )
-    ScreenManager.peek():gamepadreleased( joystick, button )
+    return delegate( "gamepadreleased", joystick, button )
 end
 
 ---
@@ -533,7 +542,7 @@ end
 -- @param joystick (Joystick) The newly connected Joystick object.
 --
 function ScreenManager.joystickadded( joystick )
-    ScreenManager.peek():joystickadded( joystick )
+    return delegate( "joystickadded", joystick )
 end
 
 ---
@@ -543,7 +552,7 @@ end
 -- @param direction (JoystickHat) The new hat direction.
 --
 function ScreenManager.joystickhat( joystick, hat, direction )
-    ScreenManager.peek():joystickhat( joystick, hat, direction )
+    return delegate( "joystickhat", joystick, hat, direction )
 end
 
 ---
@@ -552,7 +561,7 @@ end
 -- @param button   (number)   The button number.
 --
 function ScreenManager.joystickpressed( joystick, button )
-    ScreenManager.peek():joystickpressed( joystick, button )
+    return delegate( "joystickpressed", joystick, button )
 end
 
 ---
@@ -561,7 +570,7 @@ end
 -- @param button   (number)   The button number.
 --
 function ScreenManager.joystickreleased( joystick, button )
-    ScreenManager.peek():joystickreleased( joystick, button )
+    return delegate( "joystickreleased", joystick, button )
 end
 
 ---
@@ -569,7 +578,7 @@ end
 -- @param joystick (Joystick) The now-disconnected Joystick object.
 --
 function ScreenManager.joystickremoved( joystick )
-    ScreenManager.peek():joystickremoved( joystick )
+    return delegate( "joystickremoved", joystick )
 end
 
 ---
