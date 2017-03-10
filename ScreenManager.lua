@@ -61,7 +61,10 @@ local height = 0 --Stack height
 --
 local function clear()
     for i = #stack, 1, -1 do
-        stack[i]:close()
+        if type( stack[i].close ) == "function" then
+            stack[i]:close()
+        end
+
         stack[i] = nil
     end
 end
@@ -70,32 +73,42 @@ end
 -- Close and pop the current active state and activate the one beneath it
 --
 local function pop()
-    -- Close the currently active screen.
+    -- Get the currently active screen.
     local tmp = ScreenManager.peek()
 
     -- Remove the now inactive screen from the stack.
     stack[#stack] = nil
 
     -- Close the previous screen.
-    tmp:close()
+    if type( tmp.close ) == "function" then
+        tmp:close()
+    end
 
     -- Activate next screen on the stack.
-    ScreenManager.peek():setActive( true )
+    local top = ScreenManager.peek()
+    if type( top.setActive ) == "function" then
+        top:setActive( true )
+    end
 end
 
 ---
 -- Deactivate the current state, push a new state and initialize it
 --
 local function push( screen, args )
-    if ScreenManager.peek() then
-        ScreenManager.peek():setActive( false )
-    end
+  -- Deactivate the active state
+  local top = ScreenManager.peek()
+  if top and type( top.setActive ) == "function" then
+      top:setActive( false )
+  end
 
-    -- Push the new screen onto the stack.
-    stack[#stack + 1] = screens[screen].new()
+  -- Push the new screen onto the stack.
+  local new = screens[screen].new()
+  stack[#stack + 1] = new
 
-    -- Create the new screen and initialise it.
-    stack[#stack]:init( unpack( args ) )
+  -- Create the new screen and initialise it.
+  if type( new.init ) == "function" then
+      new:init( unpack( args ) )
+  end
 end
 
 ---
@@ -181,8 +194,8 @@ end
 --                 screen's init function.
 --
 function ScreenManager.init( nscreens, screen, ... )
-    if type( nscreens ) ~= "table" or #nscreens == 0 then
-        error("The first argument of ScreenManager.init should be a table containing at least a screen", 2)
+    if type( nscreens ) ~= "table" then
+        error("The first argument of ScreenManager.init should be a table containing screens", 2)
     end
 
     stack = {}
