@@ -35,12 +35,13 @@ local ScreenManager = {
 -- Constants
 -- ------------------------------------------------
 
-local ERROR_MSG = [[
+local ERROR_MSG_SCREEN = [[
 "%s" is not a valid screen!
 
 You will have to add a new one to your screen list or use one of the existing screens:
 
 %s]]
+local ERROR_MSG_NEW = 'Invalid screen "%s", screens should be tables with a "new" method'
 
 -- ------------------------------------------------
 -- Local Variables
@@ -49,12 +50,40 @@ You will have to add a new one to your screen list or use one of the existing sc
 local stack
 local screens
 
+local old_changes, old_args
+do
+    local weak = {__mode = 'v'}
+    old_changes = setmetatable({}, weak)
+    old_args    = setmetatable({}, weak)
+end
+
+local cache = {}
+local returns = { n = 0 }
+
 local changes = {}
 local height = 0 --Stack height
+
+local function null() end
+
+local concat = { '{' }
 
 -- ------------------------------------------------
 -- Private Functions
 -- ------------------------------------------------
+
+---
+-- Cleans a table and fills it with the passed arguments
+--
+local function refill( t, ... )
+    local n = select( '#', ... )
+
+    for i=1, math.max( t.n, n ) do
+        t[i] = select( i, ... )
+    end
+
+    t.n = n
+    return t
+end
 
 ---
 -- Close and remove all screens from the stack.
@@ -73,16 +102,16 @@ end
 -- Close and pop the current active state and activate the one beneath it
 --
 local function pop()
-    -- Get the currently active screen.
+    -- Close the currently active screen.
     local tmp = ScreenManager.peek()
-
-    -- Remove the now inactive screen from the stack.
-    stack[#stack] = nil
 
     -- Close the previous screen.
     if type( tmp.close ) == "function" then
         tmp:close()
     end
+
+    -- Remove the now inactive screen from the stack.
+    stack[#stack] = nil
 
     -- Activate next screen on the stack.
     local top = ScreenManager.peek()
@@ -95,58 +124,72 @@ end
 -- Deactivate the current state, push a new state and initialize it
 --
 local function push( screen, args )
-  -- Deactivate the active state
-  local top = ScreenManager.peek()
-  if top and type( top.setActive ) == "function" then
-      top:setActive( false )
-  end
+    local current = ScreenManager.peek()
+    if current and current.setActive then
+        current:setActive( false )
+    end
 
-  -- Push the new screen onto the stack.
-  local new = screens[screen].new()
-  stack[#stack + 1] = new
+    -- Push the new screen onto the stack.
+    local new = screens[screen].new()
+    stack[#stack + 1] = new
 
-  -- Create the new screen and initialise it.
-  if type( new.init ) == "function" then
-      new:init( unpack( args ) )
-  end
+    -- Create the new screen and initialise it.
+    if type( new.init ) == "function" then
+        new:init( unpack( args, 1, args.n ) )
+    end
 end
 
 ---
 -- Check if the screen is valid or error if not
 --
 local function validateScreen( screen )
-    if type( screens[screen] ) ~= "table" or type( screens[screen].new ) ~= "function" then
-        local str = "{"
+    if not screens[screen] then
+        local n = 1
 
-        for i, v in pairs( screens ) do
-            if type( v ) == "table" and type( v.new ) == "function" then
-                str = str .. i .. ', '
-            end
+        for i, _ in pairs( screens ) do
+            concat[n+1] = i
+            concat[n+2] = ', '
+            n = n + 2
+        end
+        concat[n] = '}'
+
+        for i=n, #concat do
+            concat[i] = nil
         end
 
-        str = str:sub( 1, -3 ) .. "}"
-
-        error( string.format( ERROR_MSG, tostring( screen ), str ), 3 )
+        local str = table.concat( concat )
+        error( ERROR_MSG_SCREEN:format( tostring( screen ), str ), 3 )
+    elseif type( screens[screen].new ) ~= 'function' then
+        error( ERROR_MSG_NEW:format( tostring( screen ) ), 3 )
     end
 end
 
 ---
 -- Delegates a callback to the stack, with the apropiate propagate function
 -- callback is the callback name
--- a, b, c, d, e, f are the event arguments
+-- args a table containing the event arguments
 -- level is the level of the stack to delegate to (defaults to the top)
 --
-local function delegate( callback, a, b, c, d, e, f, level )
+local function delegate( callback, args, level )
     level = level or #stack
     local state = stack[level]
 
     if not state or type( state[callback] ) ~= "function" then return end
 
     local function propagate()
-        return delegate( callback, a, b, c, d, e, f, level - 1 )
+        return delegate( callback, args, level - 1 )
     end
 
-    return state[callback]( state, propagate, a, b, c, d, e, f )
+    return state[callback]( state, propagate, unpack( args, 1, args.n ) )
+end
+
+local function call( callback, ... )
+    local args = refill( old_args[#old_args] or { n = 0 }, ... )
+    old_args[#old_args] = nil
+
+    refill( returns, delegate( callback, args ) )
+
+    old_args[#old_args + 1] = args
 end
 
 -- ------------------------------------------------
@@ -160,22 +203,19 @@ end
 -- @see push, pop, switch
 --
 function ScreenManager.performChanges()
-    if #changes == 0 then
-        return
-    end
-
-    for _, change in ipairs( changes ) do
-        if change.action == 'pop' then
+    for i=1, #changes do
+        if changes[i].action == 'pop' then
             pop()
-        elseif change.action == 'switch' then
+        elseif changes[i].action == 'switch' then
             clear()
-            push( change.screen, change.args )
-        elseif change.action == 'push' then
-            push( change.screen, change.args )
+            push( changes[i].screen, changes[i].args )
+        elseif changes[i].action == 'push' then
+            push( changes[i].screen, changes[i].args )
         end
-    end
 
-    changes = {}
+        old_changes[#old_changes + 1] = changes[i]
+        changes[i] = nil
+    end
 end
 
 ---
@@ -195,7 +235,7 @@ end
 --
 function ScreenManager.init( nscreens, screen, ... )
     if type( nscreens ) ~= "table" then
-        error("The first argument of ScreenManager.init should be a table containing screens", 2)
+        error( "The first argument of ScreenManager.init should be a table containing screens", 2 )
     end
 
     stack = {}
@@ -220,7 +260,15 @@ end
 function ScreenManager.switch( screen, ... )
     validateScreen( screen )
     height = 1
-    changes[#changes + 1] = { action = 'switch', screen = screen, args = { ... } }
+
+    local change = old_changes[#old_changes] or {}
+    old_changes[#old_changes] = nil
+
+    change.action = 'switch'
+    change.screen = screen
+    change.args = refill( change.args or { n = 0 }, ... )
+
+    changes[#changes + 1] = change
 end
 
 ---
@@ -236,7 +284,15 @@ end
 function ScreenManager.push( screen, ... )
     validateScreen( screen )
     height = height + 1
-    changes[#changes + 1] = { action = 'push', screen = screen, args = { ... } }
+
+    local change = old_changes[#old_changes] or {}
+    old_changes[#old_changes] = nil
+
+    change.action = 'push'
+    change.screen = screen
+    change.args = refill( change.args or { n = 0 }, ... )
+
+    changes[#changes + 1] = change
 end
 
 ---
@@ -255,7 +311,13 @@ end
 function ScreenManager.pop()
     if height > 1 then
         height = height - 1
-        changes[#changes + 1] = { action = 'pop' }
+
+        local change = old_changes[#old_changes] or {}
+        old_changes[#old_changes] = nil
+
+        change.action = 'pop'
+
+        changes[#changes + 1] = change
     else
         error("Can't close the last screen. Use switch() to clear the screen manager and add a new screen.", 2)
     end
@@ -279,326 +341,37 @@ end
 -- ------------------------------------------------
 
 ---
--- Reroutes the directorydropped callback to the currently active screen.
--- @param path (string) The full platform-dependent path to the directory.
---                       It can be used as an argument to love.filesystem.mount,
---                       in order to gain read access to the directory with
---                       love.filesystem.
---
-function ScreenManager.directorydropped( path )
-    return delegate( "directorydropped", path )
-end
-
----
 -- Reroutes the draw callback to all screens on the stack.
 -- Screens that are higher on the stack will overlay screens that are below
 -- them.
 --
-function ScreenManager.draw()
-    local values = { delegate( "draw" ) }
+function ScreenManager.draw( ... )
+    call( 'draw', ... )
 
     ScreenManager.performChanges()
 
-    return unpack(values)
+    return unpack( returns, 1, returns.n )
 end
 
----
--- Reroutes the filedropped callback to the currently active screen.
--- @param file (File) The unopened File object representing the file that was
---                     dropped.
---
-function ScreenManager.filedropped( file )
-    return delegate( "filedropped", file )
-end
+local meta = {
+    __index = function ( self, index )
+        local v = rawget( self, index )
 
----
--- Reroutes the focus callback to all screens on the stack.
--- @param focus (boolean) True if the window gains focus, false if it loses focus.
---
-function ScreenManager.focus( focus )
-    return delegate( "focus", focus )
-end
+        if v then
+            return v
+        elseif cache[index] then
+            return cache[index]
+        else
+            local f = function ( ... )
+                call( index, ... )
+                return unpack( returns, 1, returns.n )
+            end
 
----
--- Reroutes the keypressed callback to the currently active screen.
--- @param key      (KeyConstant) Character of the pressed key.
--- @param scancode (Scancode)    The scancode representing the pressed key.
--- @param isrepeat (boolean)     Whether this keypress event is a repeat. The
---                                delay between key repeats depends on the
---                                user's system settings.
---
-function ScreenManager.keypressed( key, scancode, isrepeat )
-    return delegate( "keypressed", key, scancode, isrepeat )
-end
-
----
--- Reroutes the keyreleased callback to the currently active screen.
--- @param key      (KeyConstant) Character of the released key.
--- @param scancode (Scancode)    The scancode representing the released key.
---
-function ScreenManager.keyreleased( key, scancode )
-    return delegate( "keyreleased", key, scancode )
-end
-
----
--- Reroutes the lowmemory callback to the currently active screen.
--- mobile devices.
---
-function ScreenManager.lowmemory()
-    return delegate( "lowmemory" )
-end
-
----
--- Reroutes the mousefocus callback to the currently active screen.
--- @param focus (boolean) Wether the window has mouse focus or not.
---
-function ScreenManager.mousefocus( focus )
-    return delegate( "mousefocus", focus )
-end
-
----
--- Reroutes the mousemoved callback to the currently active screen.
--- @param x  (number) Mouse x position.
--- @param y  (number) Mouse y position.
--- @param dx (number) The amount moved along the x-axis since the last time
---                     love.mousemoved was called.
--- @param dy (number) The amount moved along the y-axis since the last time
---                     love.mousemoved was called.
---
-function ScreenManager.mousemoved( x, y, dx, dy )
-    return delegate( "mousemoved", x, y, dx, dy )
-end
-
----
--- Reroutes the mousepressed callback to the currently active screen.
--- @param x       (number)  Mouse x position, in pixels.
--- @param y       (number)  Mouse y position, in pixels.
--- @param button  (number)  The button index that was pressed. 1 is the primary
---                           mouse button, 2 is the secondary mouse button and 3
---                           is the middle button. Further buttons are mouse
---                           dependent.
--- @param istouch (boolean) True if the mouse button press originated from a
---                           touchscreen touch-press.
---
-function ScreenManager.mousepressed( x, y, button, istouch )
-    return delegate( "mousepressed", x, y, button, istouch )
-end
-
----
--- Reroutes the mousereleased callback to the currently active screen.
--- @param x       (number)  Mouse x position, in pixels.
--- @param y       (number)  Mouse y position, in pixels.
--- @param button  (number)  The button index that was released. 1 is the primary
---                           mouse button, 2 is the secondary mouse button and 3
---                           is the middle button. Further buttons are mouse
---                           dependent.
--- @param istouch (boolean) True if the mouse button release originated from a
---                           touchscreen touch-release.
---
-function ScreenManager.mousereleased( x, y, button, istouch )
-    return delegate( "mousereleased", x, y, button, istouch )
-end
-
----
--- Reroutes the quit callback to the currently active screen.
--- @return quit (boolean) Abort quitting. If true, do not close the game.
---
-function ScreenManager.quit()
-    return delegate( "quit" )
-end
-
----
--- Reroutes the resize callback to all screens on the stack.
--- @param w (number) The new width, in pixels.
--- @param h (number) The new height, in pixels.
---
-function ScreenManager.resize( w, h )
-    return delegate( "resize", w, h )
-end
-
----
--- Reroutes the textedited callback to the currently active screen.
--- @param text   (string) The UTF-8 encoded unicode candidate text.
--- @param start  (number) The start cursor of the selected candidate text.
--- @param length (number) The length of the selected candidate text. May be 0.
---
-function ScreenManager.textedited( text, start, length )
-    return delegate( "textedited", text, start, length )
-end
-
----
--- Reroutes the textinput callback to the currently active screen.
--- @param input (string) The UTF-8 encoded unicode text.
---
-function ScreenManager.textinput( input )
-    return delegate( "textinput", input )
-end
-
----
--- Reroutes the threaderror callback to all screens.
--- @param thread   (Thread) The thread which produced the error.
--- @param errorstr (string) The error message.
---
-function ScreenManager.threaderror( thread, errorstr )
-    return delegate( "threaderror", thread, errorstr )
-end
-
-
----
--- Reroutes the touchmoved callback to the currently active screen.
--- @param id       (light userdata) The identifier for the touch press.
--- @param x        (number)         The x-axis position of the touch press inside the
---                                   window, in pixels.
--- @param y        (number)         The y-axis position of the touch press inside the
---                                   window, in pixels.
--- @param dx       (number)         The x-axis movement of the touch inside the
---                                   window, in pixels.
--- @param dy       (number)         The y-axis movement of the touch inside the
---                                   window, in pixels.
--- @param pressure (number)         The amount of pressure being applied. Most
---                                   touch screens aren't pressure sensitive,
---                                   in which case the pressure will be 1.
---
-function ScreenManager.touchmoved( id, x, y, dx, dy, pressure )
-    return delegate( "touchmoved", id, x, y, dx, dy, pressure )
-end
-
----
--- Reroutes the touchpressed callback to the currently active screen.
--- @param id       (light userdata) The identifier for the touch press.
--- @param x        (number)         The x-axis position of the touch press inside the
---                                   window, in pixels.
--- @param y        (number)         The y-axis position of the touch press inside the
---                                   window, in pixels.
--- @param dx       (number)         The x-axis movement of the touch inside the
---                                   window, in pixels.
--- @param dy       (number)         The y-axis movement of the touch inside the
---                                   window, in pixels.
--- @param pressure (number)         The amount of pressure being applied. Most
---                                   touch screens aren't pressure sensitive,
---                                   in which case the pressure will be 1.
---
-function ScreenManager.touchpressed( id, x, y, dx, dy, pressure )
-    return delegate( "touchpressed", id, x, y, dx, dy, pressure )
-end
-
----
--- Reroutes the touchreleased callback to the currently active screen.
--- @param id       (light userdata) The identifier for the touch press.
--- @param x        (number)         The x-axis position of the touch press inside the
---                                   window, in pixels.
--- @param y        (number)         The y-axis position of the touch press inside the
---                                   window, in pixels.
--- @param dx       (number)         The x-axis movement of the touch inside the
---                                   window, in pixels.
--- @param dy       (number)         The y-axis movement of the touch inside the
---                                   window, in pixels.
--- @param pressure (number)         The amount of pressure being applied. Most
---                                   touch screens aren't pressure sensitive,
---                                   in which case the pressure will be 1.
---
-function ScreenManager.touchreleased( id, x, y, dx, dy, pressure )
-    return delegate( "touchreleased", id, x, y, dx, dy, pressure )
-end
-
----
--- Reroutes the update callback to all screens.
--- @param dt (number) Time since the last update in seconds.
---
-function ScreenManager.update( dt )
-    return delegate( "update", dt )
-end
-
----
--- Reroutes the visible callback to all screens.
--- @param visible (boolean) True if the window is visible, false if it isn't.
---
-function ScreenManager.visible( visible )
-    return delegate( "visible", visible )
-end
-
----
--- Reroutes the wheelmoved callback to the currently active screen.
--- @param x (number) Amount of horizontal mouse wheel movement. Positive values
---                    indicate movement to the right.
--- @param y (number) Amount of vertical mouse wheel movement. Positive values
---                    indicate upward movement.
---
-function ScreenManager.wheelmoved( x, y )
-    return delegate( "wheelmoved", x, y )
-end
-
----
--- Reroutes the gamepadaxis callback to the currently active screen.
--- @param joystick (Joystick)    The joystick object.
--- @param axis     (GamepadAxis) The joystick object.
--- @param value    (number)      The new axis value.
---
-function ScreenManager.gamepadaxis( joystick, axis, value )
-    return delegate( "gamepadaxis", joystick, axis, value )
-end
-
----
--- Reroutes the gamepadpressed callback to the currently active screen.
--- @param joystick (Joystick)      The joystick object.
--- @param button   (GamepadButton) The virtual gamepad button.
---
-function ScreenManager.gamepadpressed( joystick, button )
-    return delegate( "gamepadpressed", joystick, button )
-end
-
----
--- Reroutes the gamepadreleased callback to the currently active screen.
--- @param joystick (Joystick)      The joystick object.
--- @param button   (GamepadButton) The virtual gamepad button.
---
-function ScreenManager.gamepadreleased( joystick, button )
-    return delegate( "gamepadreleased", joystick, button )
-end
-
----
--- Reroutes the joystickadded callback to the currently active screen.
--- @param joystick (Joystick) The newly connected Joystick object.
---
-function ScreenManager.joystickadded( joystick )
-    return delegate( "joystickadded", joystick )
-end
-
----
--- Reroutes the joystickhat callback to the currently active screen.
--- @param joystick  (Joystick)    The newly connected Joystick object.
--- @param hat       (number)      The hat number.
--- @param direction (JoystickHat) The new hat direction.
---
-function ScreenManager.joystickhat( joystick, hat, direction )
-    return delegate( "joystickhat", joystick, hat, direction )
-end
-
----
--- Reroutes the joystickpressed callback to the currently active screen.
--- @param joystick (Joystick) The newly connected Joystick object.
--- @param button   (number)   The button number.
---
-function ScreenManager.joystickpressed( joystick, button )
-    return delegate( "joystickpressed", joystick, button )
-end
-
----
--- Reroutes the joystickreleased callback to the currently active screen.
--- @param joystick (Joystick) The newly connected Joystick object.
--- @param button   (number)   The button number.
---
-function ScreenManager.joystickreleased( joystick, button )
-    return delegate( "joystickreleased", joystick, button )
-end
-
----
--- Reroutes the joystickremoved callback to the currently active screen.
--- @param joystick (Joystick) The now-disconnected Joystick object.
---
-function ScreenManager.joystickremoved( joystick )
-    return delegate( "joystickremoved", joystick )
-end
+            cache[index] = f
+            return f
+        end
+    end
+}
 
 ---
 -- Register to multiple LÖVE callbacks, defaults to all.
@@ -606,12 +379,11 @@ end
 --
 function ScreenManager.registerCallbacks( callbacks )
     local registry = {}
-    local function null() end
 
     if type( callbacks ) ~= 'table' then
-        callbacks = { 'update', 'draw' }
+        callbacks = {'update', 'draw'}
 
-        for name in pairs( love.handlers ) do
+        for name in pairs( love.handlers ) do --luacheck:ignore
             callbacks[#callbacks + 1] = name
         end
     end
@@ -630,7 +402,7 @@ end
 -- Return Module
 -- ------------------------------------------------
 
-return ScreenManager
+return setmetatable(ScreenManager, meta)
 
 --==================================================================================================
 -- Created 02.06.14 - 17:30                                                                        =
